@@ -7,8 +7,11 @@ import networkx as nx
 import argparse
 
 from functools import reduce
+from Planner.planner import Planner
 
 import math
+
+config_dir = "../config/"
 
 
 def generate_fattree_topology(k):
@@ -16,12 +19,12 @@ def generate_fattree_topology(k):
     total_edges = 0
     num_core = int((k / 2) ** 2)
 
-    # core-agg 连接数字大的agg
+    # core-agg
     for i in range(num_core):
-        core_switch = f"corei{i}"
+        core_switch = f"core_{i}"
         agg_index = int(math.floor(i / (k / 2)))
         for j in range(k):
-            aggregation_switch = f"aggri{j}i{agg_index}"
+            aggregation_switch = f"aggr_{j}_{agg_index}"
             total_edges += 1
             topology.append((core_switch, f"{core_switch}->{aggregation_switch}", aggregation_switch,
                              f"{aggregation_switch}->{core_switch}"))
@@ -29,23 +32,12 @@ def generate_fattree_topology(k):
     # agg-edge
     for pod_index in range(k):
         for j in range(int(k / 2)):
-            aggregation_switch1 = f"aggri{pod_index}i{j}"
+            aggregation_switch1 = f"aggr_{pod_index}_{j}"
             for m in range(int(k / 2)):
-                aggregation_switch2 = f"edgei{pod_index}i{m}"
+                aggregation_switch2 = f"edge_{pod_index}_{m}"
                 total_edges += 1
                 topology.append((aggregation_switch1, f"{aggregation_switch1}->{aggregation_switch2}",
                                  aggregation_switch2, f"{aggregation_switch2}->{aggregation_switch1}"))
-
-    # edge-host 不加host！！！
-    # for pod_index in range(k):
-    #     for j in range(int(k/2)):
-    #         agg_index = j
-    #         aggregation_switch = f"aggr_{pod_index}_{agg_index}"
-    #         for m in range(int(k/2)):
-    #             host_index = int(m + j*k/2)
-    #             host_switch = f"host_{pod_index}_{host_index}"
-    #             topology.append((host_switch, f"{host_switch}->{aggregation_switch}", aggregation_switch, f"{aggregation_switch}->{host_switch}"))
-    #             total_edges += 1
 
     return topology, total_edges
 
@@ -56,7 +48,7 @@ def save_topology_to_file(topology, filename):
             file.write(" ".join(edge) + "\n")
 
 
-class IpGenerator():
+class IpGenerator:
     def __init__(self, prefix=24, base=167772160):
         self.prefix = prefix
         self.network = 0
@@ -71,20 +63,20 @@ class IpGenerator():
         return ip
 
 
-def write_space(nodeToPrefix, prefix, output):
+def write_space(node_to_prefix, prefix, output):
     with open(os.path.join(output, "packet_space"), 'w') as f:
-        for node, ips in nodeToPrefix.items():
+        for node, ips in node_to_prefix.items():
             for ip in ips:
                 f.write('%s %s %s\n' % (node, ip, prefix))
 
 
-def gen_fib(input, output, nprefix, prefix):
+def gen_fib(input_file, output_file, n_prefix, prefix):
     FIBs = {}
-    nodeToPrefix = {}
-    ipGen = IpGenerator(prefix)
+    node_to_prefix = {}
+    ip_generator = IpGenerator(prefix)
     G = nx.Graph()
     res = []
-    for line in open(input):
+    for line in open(input_file):
         if '?' in line or 'None' in line:
             continue
         arr = line.split()
@@ -96,33 +88,33 @@ def gen_fib(input, output, nprefix, prefix):
 
     for node in G.nodes:
         FIBs[node] = []
-        nodeToPrefix[node] = []
-        for i in range(nprefix):
-            nodeToPrefix[node].append(ipGen.gen())
+        node_to_prefix[node] = []
+        for i in range(n_prefix):
+            node_to_prefix[node].append(ip_generator.gen())
         # res[node] = dict()
         # res[node]["ip"] = nodeToPrefix[node]
 
-    write_space(nodeToPrefix, prefix, output)
+    write_space(node_to_prefix, prefix, output_file)
 
     for n in G.nodes:
         lengths, paths = nx.single_source_dijkstra(G, n, weight='latency')
         for (dst, path) in paths.items():
             if dst == n:
                 continue
-            for p in nodeToPrefix[dst]:
+            for p in node_to_prefix[dst]:
                 FIBs[n].append('%s %s %s' % (p, prefix, G[n][path[1]]['portmap'][n]))
-    path = os.path.join(output, "rule")
+    path = os.path.join(output_file, "rule")
     if not os.path.exists(path):
         os.mkdir(path)
     for (sw, rules) in FIBs.items():
-        res.append({"name": sw, "ip": [ch1(i) + "/" + str(prefix) for i in nodeToPrefix[sw]], "rule_num": len(rules)})
+        res.append({"name": sw, "ip": [ch1(i) + "/" + str(prefix) for i in node_to_prefix[sw]], "rule_num": len(rules)})
         with open(os.path.join(path, sw), 'w') as f:
             for rule in rules:
                 f.write('fw %s\n' % rule)
 
     print('#nodes: %d' % len(G.nodes))
     print('#edges: %d' % len(G.edges))
-    print('FIB generate to %s with %d entries' % (output, len(G.nodes) * (len(G.nodes) - 1) * nprefix))
+    print('FIBs generated to %s with %d entries' % (output_file, len(G.nodes) * (len(G.nodes) - 1) * n_prefix))
 
     return res
 
@@ -152,6 +144,29 @@ def read_fib(path, device):
     return res
 
 
+def gen_dpvnet(k):
+    planner = Planner()
+    planner.read_topology_from_file(f"{config_dir}fattree{k}/topology")
+
+    total_states = []
+    # build DPVNet for two edge routers in the same pod
+    device1 = 'edge_0_0'
+    device2 = f'edge_0_{(k // 2) - 1}'
+    states = planner.gen(None, device2, [device1], r"(exist >= 1, (`%s`.*`%s` , (<= shortest+2)))" % (device1, device2))
+    if states:
+        total_states.append((device2, [device1], "exists >= 1", "%s.*%s" % (device1, device2), states))
+        print(f"generated DPVNet for {device1} -> {device2}")
+    # build DPVNet for two edge routers in different pods
+    device1 = 'edge_0_0'
+    device2 = f'edge_{k - 1}_{(k // 2) - 1}'
+    states = planner.gen(None, device2, [device1], r"(exist >= 1, (`%s`.*`%s` , (<= shortest+2)))" % (device1, device2))
+    if states:
+        total_states.append((device2, [device1], "exists >= 1", "%s.*%s" % (device1, device2), states))
+        print(f"generated DPVNet for {device1} -> {device2}")
+    planner.output_puml(total_states, f"{config_dir}fattree{k}/DPVNet.puml", True)
+    print('DPVNet generated to %s' % f"{config_dir}fattree{k}/DPVNet.puml")
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="The output format is: node ip prefix outport, read as \"a node has a rule ip/prefix that forward to outport\"")
@@ -163,15 +178,16 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Example usage
-    k_value = args.kvalue  # You can adjust this based on your desired Fattree size
-    fattree_topology, total_edges = generate_fattree_topology(k_value)
-    save_topology_to_file(fattree_topology, '../config/fattree' + str(k_value) + '/topology')
+    # k = args.kvalue  # You can adjust this based on your desired Fattree size
+    k = 12
+    fattree_topology, total_edges = generate_fattree_topology(k)
+    save_topology_to_file(fattree_topology, f"{config_dir}fattree{k}/topology")
 
-    k = k_value
     total_nodes = 5 * k * k / 4
     print(f"Total nodes in Fattree topology: {total_nodes}")
     print(f"Total edges in Fattree topology: {total_edges}")
 
-    inputFile = '../config/fattree' + str(k_value) + '/topology'
-    onputFile = '../config/fattree' + str(k_value)
-    gen_fib(inputFile, onputFile, args.nprefix, args.prefix)
+    input_f = f"{config_dir}fattree{k}/topology"
+    output_f = f"{config_dir}fattree{k}"
+    gen_fib(input_f, output_f, args.nprefix, args.prefix)
+    gen_dpvnet(k)

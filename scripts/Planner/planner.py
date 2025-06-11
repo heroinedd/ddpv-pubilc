@@ -149,7 +149,7 @@ class Planner:
                 f.write("'path: %s\n" % path_exp)
                 for state in states:
                     for e in state.edge_out:
-                        f.write("%s-->%s:%s\n" % (state.get_name(), e.dst.get_name(), e.get_label()))
+                        f.write("%s-->%s\n" % (state.get_name(), e.dst.get_name()))
                     if state.is_accept:
                         f.write("%s-->[*]:[[]]\n" % (state.get_name()))
                 f.write("}\n")
