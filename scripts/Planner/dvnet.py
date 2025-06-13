@@ -1,4 +1,3 @@
-
 #  This program is free software: you can redistribute it and/or modify it under the terms of
 #   the GNU General Public License as published by the Free Software Foundation, either
 #    version 3 of the License, or (at your option) any later version.
@@ -66,6 +65,12 @@ class State:
             return "[*]"
         return self.device + "." + str(self.index)
 
+    def get_human_readable_name(self):
+        if self.device == "[*]":
+            return "[*]"
+        return self.dvnet.rename_dict_reverse[self.device] + "(" + ",".join(
+            [self.dvnet.rename_dict_reverse[d] for d in self.path]) + ")"
+
     def __lt__(self, other):
         return self.length < other.length
 
@@ -85,7 +90,7 @@ class StateEdge:
         return r
 
     def __repr__(self):
-        return self.src.device+"-"+self.dst.device
+        return self.src.device + "-" + self.dst.device
 
 
 class DVNet:
@@ -119,6 +124,7 @@ class DVNet:
         State.dvnet = self
         self.edge_count = 0
         self.zero_condition = None
+        self.rename_dict_reverse = {}
 
     def _init(self):
         self.dfa = None
@@ -132,9 +138,10 @@ class DVNet:
         self.state_map.clear()
         self.used_edges.clear()
 
-    def add_topologies(self, edges):
+    def add_topologies(self, edges, rename_dict_reverse):
         for edge in edges:
             self.add_topology(edge)
+        self.rename_dict_reverse = rename_dict_reverse
 
     def add_topology(self, edge):
         d1 = edge[0]
@@ -165,9 +172,9 @@ class DVNet:
     def _add_edge(self, device1, device2):
         if device1 > device2:
             device1, device2 = device2, device1
-        edge_name = device1+"-"+device2
+        edge_name = device1 + "-" + device2
         if edge_name not in self._edge_map:
-            self._edge_map[edge_name] = len(self._edge_map)+1
+            self._edge_map[edge_name] = len(self._edge_map) + 1
             self.edge_count += 1
 
     def _get_edge_id(self, device1: str, device2: str):
@@ -175,7 +182,7 @@ class DVNet:
             return 0
         if device1 > device2:
             device1, device2 = device2, device1
-        edge_name = device1+"-"+device2
+        edge_name = device1 + "-" + device2
         return self._edge_map[edge_name]
 
     def read_topology_file(self, filename):
@@ -226,11 +233,12 @@ class DVNet:
         terminal_meet_nodes = []
         # search_queue.sort(key=lambda a: a.length)
         while len(search_queue) > 0:
+            # print("search queue: " + ",".join([i.get_human_readable_name() for i in search_queue]))
             queue = []
             for state in search_queue:
                 self._explored_level = state.length
                 # 判断路径长度是否符合需求
-                if not length_filter(state.length-1):
+                if not length_filter(state.length - 1):
                     self._unexplored_states.setdefault(state.length, []).append(state)
                     continue
                 if state.is_explored is True:
@@ -254,10 +262,36 @@ class DVNet:
                     dfa_state = self.dfa_transitions[state.dfa_state][next_hop]
                     new_state = State.get_state(next_hop, state.path + [next_hop], dfa_state)
                     self._link_state(state, new_state)
-                    if new_state.is_explored is False:
+                    if new_state.is_explored is False and self.valley_free_path(new_state.path):
                         queue.append(new_state)
             search_queue = queue
         return smallest_length
+
+    def valley_free_path(self, path: [str]):
+        if len(path) <= 2:
+            return True
+
+        changed = 0
+
+        def level(node):
+            h_node = State.dvnet.rename_dict_reverse[node]
+            return 0 if h_node.count("edge") > 0 else 1 if h_node.count("aggr") > 0 else 2
+
+        def up(node1, node2):
+            level1 = level(node1)
+            level2 = level(node2)
+            return level1 < level2
+
+        cur_dir = up(path[0], path[1])
+        i = 2
+        while i < len(path):
+            tmp = up(path[i - 1], path[i])
+            if tmp != cur_dir:
+                changed += 1
+                cur_dir = tmp
+            i += 1
+
+        return changed <= 1
 
     def find_search_condition(self, k) -> set[frozenbitarray]:
         """
@@ -268,7 +302,7 @@ class DVNet:
         new_conditions = set()
         for state in self._terminal_states:
             for condition in state.conditions:
-                if condition.count(1) == k-1:
+                if condition.count(1) == k - 1:
                     tmp_condition = bitarray(condition)
                     for index in state.edges.search(1):
                         tmp_condition[index] = True
@@ -293,7 +327,7 @@ class DVNet:
             smallest_hops = DVNet.MAX_HOPS
             # 先看目前的终点中是否由符合condition的
             for terminal_state in self._terminal_states:
-                if not length_filter(terminal_state.length-1):
+                if not length_filter(terminal_state.length - 1):
                     break
                 if self._check_condition(terminal_state, condition):
                     terminal_state.conditions.add(condition)
@@ -302,7 +336,7 @@ class DVNet:
 
             without_violation_states = []
             for k, v in self._unexplored_states.items():
-                if length_filter(k-1):
+                if length_filter(k - 1):
                     without_violation_states.extend(v)
                     v.clear()
             new_smallest_hops = self.search(condition, without_violation_states, length_filter, smallest_hops)
@@ -365,7 +399,7 @@ class DVNet:
                 for i in range(state_nums):
                     state = states[i]
                     merge_list = []
-                    for j in range(i+1, state_nums):
+                    for j in range(i + 1, state_nums):
                         if self._is_undistinguished(state, states[j]):
                             merge_list.append(states[j])
                     if len(merge_list) > 0:
@@ -394,14 +428,15 @@ class DVNet:
                 shortest_length = d[self.device_to_id[d1]][self.device_to_id[d2]]
                 if shortest_length == numpy.inf:
                     continue
-                states.append((d2, d1, self.gen_dvnet("%s.*%s"%(d2, d1), d2, k, x, output, shortest_length=shortest_length+1)))
+                states.append((d2, d1, self.gen_dvnet("%s.*%s" % (d2, d1), d2, k, x, output,
+                                                      shortest_length=shortest_length + 1)))
                 # print(len(self.used_edges)/ len(self._edge_map) )
                 # print("%s -> %s" % (d1, d2))
 
         t2 = time.time_ns()
         self.clean_device_count()
         self.output_puml(states, output)
-        return (t2-t1)/1000000.0
+        return (t2 - t1) / 1000000.0
 
     def gen_dvnet(self, requirement, ingress, k_max, length_filter, output, shortest_length=MAX_HOPS):
         # step 1
@@ -490,7 +525,7 @@ class DVNet:
             for i in range(edges_len):
                 edge = edges[i]
                 merge_list = []
-                for j in range(i+1, edges_len):
+                for j in range(i + 1, edges_len):
                     if edge.src == edges[j].src and edge.dst == edges[j].dst:
                         merge_list.append(edges[j])
                 if len(merge_list) > 0:
@@ -528,7 +563,7 @@ class DVNet:
     def _gen_loop_free_dfa(self):
         dfa = None
         for device in self.devices:
-            dfa2 = DFA.of_length(self.devices,min_length=0, max_length=1, symbols_to_count={device}).complement()
+            dfa2 = DFA.of_length(self.devices, min_length=0, max_length=1, symbols_to_count={device}).complement()
             dfa = dfa2 if dfa is None else dfa.union(dfa2)
         self.loop_free_dfa = dfa
 

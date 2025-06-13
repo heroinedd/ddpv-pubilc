@@ -2,6 +2,7 @@ import os.path
 import os
 import socket
 import struct
+import time
 
 import networkx as nx
 import argparse
@@ -152,17 +153,19 @@ def gen_dpvnet(k):
     # build DPVNet for two edge routers in the same pod
     device1 = 'edge_0_0'
     device2 = f'edge_0_{(k // 2) - 1}'
-    states = planner.gen(None, device2, [device1], r"(exist >= 1, (`%s`.*`%s` , (<= shortest+2)))" % (device1, device2))
+    states = planner.gen(None, device2, [device1], r"(exist >= 1, (`%s`.*`%s` , (<= shortest)))" % (device1, device2))
     if states:
         total_states.append((device2, [device1], "exists >= 1", "%s.*%s" % (device1, device2), states))
         print(f"generated DPVNet for {device1} -> {device2}")
     # build DPVNet for two edge routers in different pods
+    start = time.time()
     device1 = 'edge_0_0'
     device2 = f'edge_{k - 1}_{(k // 2) - 1}'
-    states = planner.gen(None, device2, [device1], r"(exist >= 1, (`%s`.*`%s` , (<= shortest+2)))" % (device1, device2))
+    states = planner.gen(None, device2, [device1], r"(exist >= 1, (`%s`.*`%s` , (<= shortest)))" % (device1, device2))
     if states:
         total_states.append((device2, [device1], "exists >= 1", "%s.*%s" % (device1, device2), states))
         print(f"generated DPVNet for {device1} -> {device2}")
+    print(time.time() - start)
     planner.output_puml(total_states, f"{config_dir}fattree{k}/DPVNet.puml", True)
     print('DPVNet generated to %s' % f"{config_dir}fattree{k}/DPVNet.puml")
 
@@ -170,24 +173,25 @@ def gen_dpvnet(k):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="The output format is: node ip prefix outport, read as \"a node has a rule ip/prefix that forward to outport\"")
-    # parser.add_argument("input", help="the input topology file")
-    # parser.add_argument("output", help="the output FIB file")
     parser.add_argument("-nprefix", type=int, default=1, help="the number of prefixes on each node, default=1")
     parser.add_argument("-prefix", type=int, default=24, help="the prefix for each address, default=24")
     parser.add_argument("-kvalue", type=int, default=4, help="fattree size")
     args = parser.parse_args()
 
-    # Example usage
     # k = args.kvalue  # You can adjust this based on your desired Fattree size
-    k = 12
-    fattree_topology, total_edges = generate_fattree_topology(k)
-    save_topology_to_file(fattree_topology, f"{config_dir}fattree{k}/topology")
+    k = 48
 
-    total_nodes = 5 * k * k / 4
-    print(f"Total nodes in Fattree topology: {total_nodes}")
-    print(f"Total edges in Fattree topology: {total_edges}")
+    # 1. generate topology
+    # fattree_topology, total_edges = generate_fattree_topology(k)
+    # save_topology_to_file(fattree_topology, f"{config_dir}fattree{k}/topology")
+    # total_nodes = 5 * k * k / 4
+    # print(f"Total nodes in Fattree topology: {total_nodes}")
+    # print(f"Total edges in Fattree topology: {total_edges}")
 
-    input_f = f"{config_dir}fattree{k}/topology"
-    output_f = f"{config_dir}fattree{k}"
-    gen_fib(input_f, output_f, args.nprefix, args.prefix)
+    # 2. generate FIBs
+    # input_f = f"{config_dir}fattree{k}/topology"
+    # output_f = f"{config_dir}fattree{k}"
+    # gen_fib(input_f, output_f, args.nprefix, args.prefix)
+
+    # 3. generate DPVNet
     gen_dpvnet(k)

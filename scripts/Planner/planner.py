@@ -209,7 +209,7 @@ class Planner:
         path_exp = "".join([self.rename_dict[i] if i in self.rename_dict else i for i in behavior["path"]["path_exp"]])
         new_ingress = [self.rename_dict[ingress] for ingress in ingresses]
         dvnet = DVNet()
-        dvnet.add_topologies(self.topologies)
+        dvnet.add_topologies(self.topologies, self.rename_dict_reverse)
         k_dict = {
             "any_one": 1,
             "any_two": 2,
